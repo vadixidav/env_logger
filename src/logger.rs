@@ -622,7 +622,7 @@ impl Logger {
     /// Log to a writer.
     ///
     /// Note: This may include ANSI escape sequences if this has been configured that way.
-    pub fn write_log(&self, writer: &mut impl io::Write, record: &Record<'_>) {
+    pub fn write_log(&self, mut writer: impl io::Write, record: &Record<'_>) {
         // Log records are written to a thread-local buffer before being printed
         // to the terminal. We clear these buffers afterwards, but they aren't shrunk
         // so will always at least have capacity for the largest log record formatted
@@ -635,6 +635,8 @@ impl Logger {
         thread_local! {
             static FORMATTER: RefCell<Option<Formatter>> = const { RefCell::new(None) };
         }
+
+        let writer = &mut writer;
 
         let mut print = |formatter: &mut Formatter, record: &Record<'_>| {
             let _ = (self.format)(formatter, record).and_then(|_| formatter.write(writer));
@@ -682,7 +684,7 @@ impl Logger {
     /// Log to a writer and the normal log pathway at once.
     ///
     /// Note: This may include ANSI escape sequences if this has been configured that way.
-    pub fn dual_log(&self, writer: &mut impl io::Write, record: &Record<'_>) {
+    pub fn dual_log(&self, mut writer: impl io::Write, record: &Record<'_>) {
         // Log records are written to a thread-local buffer before being printed
         // to the terminal. We clear these buffers afterwards, but they aren't shrunk
         // so will always at least have capacity for the largest log record formatted
@@ -695,6 +697,8 @@ impl Logger {
         thread_local! {
             static FORMATTER: RefCell<Option<Formatter>> = const { RefCell::new(None) };
         }
+
+        let writer = &mut writer;
 
         let mut print = |formatter: &mut Formatter, record: &Record<'_>| {
             let _ = (self.format)(formatter, record).and_then(|_| {
