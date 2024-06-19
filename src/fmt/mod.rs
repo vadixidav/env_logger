@@ -149,6 +149,10 @@ impl Formatter {
         writer.print(&self.buf.borrow())
     }
 
+    pub(crate) fn write(&self, writer: &mut impl Write) -> io::Result<()> {
+        writer.write_all(self.buf.borrow().as_bytes())
+    }
+
     pub(crate) fn clear(&mut self) {
         self.buf.borrow_mut().clear();
     }

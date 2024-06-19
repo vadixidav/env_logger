@@ -618,6 +618,130 @@ impl Logger {
     pub fn matches(&self, record: &Record<'_>) -> bool {
         self.filter.matches(record)
     }
+
+    /// Log to a writer.
+    ///
+    /// Note: This may include ANSI escape sequences if this has been configured that way.
+    pub fn write_log(&self, writer: &mut impl io::Write, record: &Record<'_>) {
+        // Log records are written to a thread-local buffer before being printed
+        // to the terminal. We clear these buffers afterwards, but they aren't shrunk
+        // so will always at least have capacity for the largest log record formatted
+        // on that thread.
+        //
+        // If multiple `Logger`s are used by the same threads then the thread-local
+        // formatter might have different color support. If this is the case the
+        // formatter and its buffer are discarded and recreated.
+
+        thread_local! {
+            static FORMATTER: RefCell<Option<Formatter>> = const { RefCell::new(None) };
+        }
+
+        let mut print = |formatter: &mut Formatter, record: &Record<'_>| {
+            let _ = (self.format)(formatter, record).and_then(|_| formatter.write(writer));
+
+            // Always clear the buffer afterwards
+            formatter.clear();
+        };
+
+        let printed = FORMATTER
+            .try_with(|tl_buf| {
+                if let Ok(mut tl_buf) = tl_buf.try_borrow_mut() {
+                    // There are no active borrows of the buffer
+                    if let Some(ref mut formatter) = *tl_buf {
+                        // We have a previously set formatter
+
+                        // Check the buffer style. If it's different from the logger's
+                        // style then drop the buffer and recreate it.
+                        if formatter.write_style() != self.writer.write_style() {
+                            *formatter = Formatter::new(&self.writer);
+                        }
+
+                        print(formatter, record);
+                    } else {
+                        // We don't have a previously set formatter
+                        let mut formatter = Formatter::new(&self.writer);
+                        print(&mut formatter, record);
+
+                        *tl_buf = Some(formatter);
+                    }
+                } else {
+                    // There's already an active borrow of the buffer (due to re-entrancy)
+                    print(&mut Formatter::new(&self.writer), record);
+                }
+            })
+            .is_ok();
+
+        if !printed {
+            // The thread-local storage was not available (because its
+            // destructor has already run). Create a new single-use
+            // Formatter on the stack for this call.
+            print(&mut Formatter::new(&self.writer), record);
+        }
+    }
+
+    /// Log to a writer and the normal log pathway at once.
+    ///
+    /// Note: This may include ANSI escape sequences if this has been configured that way.
+    pub fn dual_log(&self, writer: &mut impl io::Write, record: &Record<'_>) {
+        // Log records are written to a thread-local buffer before being printed
+        // to the terminal. We clear these buffers afterwards, but they aren't shrunk
+        // so will always at least have capacity for the largest log record formatted
+        // on that thread.
+        //
+        // If multiple `Logger`s are used by the same threads then the thread-local
+        // formatter might have different color support. If this is the case the
+        // formatter and its buffer are discarded and recreated.
+
+        thread_local! {
+            static FORMATTER: RefCell<Option<Formatter>> = const { RefCell::new(None) };
+        }
+
+        let mut print = |formatter: &mut Formatter, record: &Record<'_>| {
+            let _ = (self.format)(formatter, record).and_then(|_| {
+                formatter.print(&self.writer)?;
+                formatter.write(writer)?;
+                Ok(())
+            });
+
+            // Always clear the buffer afterwards
+            formatter.clear();
+        };
+
+        let printed = FORMATTER
+            .try_with(|tl_buf| {
+                if let Ok(mut tl_buf) = tl_buf.try_borrow_mut() {
+                    // There are no active borrows of the buffer
+                    if let Some(ref mut formatter) = *tl_buf {
+                        // We have a previously set formatter
+
+                        // Check the buffer style. If it's different from the logger's
+                        // style then drop the buffer and recreate it.
+                        if formatter.write_style() != self.writer.write_style() {
+                            *formatter = Formatter::new(&self.writer);
+                        }
+
+                        print(formatter, record);
+                    } else {
+                        // We don't have a previously set formatter
+                        let mut formatter = Formatter::new(&self.writer);
+                        print(&mut formatter, record);
+
+                        *tl_buf = Some(formatter);
+                    }
+                } else {
+                    // There's already an active borrow of the buffer (due to re-entrancy)
+                    print(&mut Formatter::new(&self.writer), record);
+                }
+            })
+            .is_ok();
+
+        if !printed {
+            // The thread-local storage was not available (because its
+            // destructor has already run). Create a new single-use
+            // Formatter on the stack for this call.
+            print(&mut Formatter::new(&self.writer), record);
+        }
+    }
 }
 
 impl Log for Logger {
@@ -847,6 +971,29 @@ impl<'a> Var<'a> {
         env::var(&*self.name)
             .ok()
             .or_else(|| self.default.clone().map(|v| v.into_owned()))
+    }
+}
+
+pub struct DualWriter<W1, W2> {
+    w1: W1,
+    w2: W2,
+}
+
+impl<W1, W2> io::Write for DualWriter<W1, W2>
+where
+    W1: io::Write,
+    W2: io::Write,
+{
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.w1.write_all(buf)?;
+        self.w2.write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.w1.flush()?;
+        self.w2.flush()?;
+        Ok(())
     }
 }
 
